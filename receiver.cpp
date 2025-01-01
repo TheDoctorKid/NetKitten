@@ -11,6 +11,7 @@ class Receiver
     unsigned short currentState;
     std::atomic<bool> & established;
     std::atomic<bool> & listening;
+    std::atomic<bool> & partner_finished;
     std::vector<uint8_t> read_buffer;                //reads tetra bits in order which they arrived
     std::vector<uint8_t> transmission_content;       //perceived transmission content
     std::mutex & hardware_lock;
@@ -20,19 +21,19 @@ class Receiver
 
 
     public:
-    Receiver(B15F* board, boost::asio::serial_port* ser, TimedQueue & pen_ack, TimedQueue & ack_q, TimedQueue & neg_ack_q, std::atomic<bool> & es, std::atomic<bool> & li, std::mutex & hl, int mo)
-        : b15f(board), serial(ser), pending_ack(pen_ack), ack_queue(ack_q), neg_ack_queue(neg_ack_q), established(es), listening(li), hardware_lock(hl), mode(mo)
+    Receiver(B15F* board, boost::asio::serial_port* ser, TimedQueue & pen_ack, TimedQueue & ack_q, TimedQueue & neg_ack_q, std::atomic<bool> & es, std::atomic<bool> & li, std::atomic<bool> & pf, std::mutex & hl, int mo)
+        : b15f(board), serial(ser), pending_ack(pen_ack), ack_queue(ack_q), neg_ack_queue(neg_ack_q), established(es), listening(li), partner_finished(pf), hardware_lock(hl), mode(mo)
     {
        
     }
 
 
 
-    void beginListening()
+    void beginListening()       //switch states of listening
     {
         currentState = 1;                   //start in sync state
 
-        while(currentState != 0)                        //receiving main loop
+        while(currentState != 0)            //receiving main loop
         {
             switch (currentState)           //1=sync, 2=switch await, 3=reading
             {
@@ -49,7 +50,7 @@ class Receiver
                 break;
             
             default:
-            std::cout << "A fatal error occured while receiving the message!" << std::endl;
+                std::cout << "A fatal error occured while receiving the message!" << std::endl;
                 break;
             }
 
@@ -68,17 +69,7 @@ class Receiver
     {
         while(!(established.load() && listening.load()))
         {
-            uint8_t curr = 0;
-            uint8_t prev = 0;
-            while(true)             //try catching the intermission intervall
-            {
-                curr = fastReadTetraPack();
-                if(prev == 0x0F && curr == 0x00)
-                {
-                    break;
-                }
-                prev = curr;
-            }
+            awaitSwitch();      //try to catch falling edge
 
             for(uint32_t i = 0; i <= BYTE_BETWEEN_SYNC; i++)         
             {
@@ -89,6 +80,7 @@ class Receiver
             {
             case 1:             //buffer was full with SYNC
                 listening.store(true);
+                established.store(false);
                 read_buffer.clear();
                 break;
 
@@ -154,6 +146,35 @@ class Receiver
 
 
 
+    void awaitSwitch() 
+    {
+    uint8_t prevByte = 0x00;
+    uint8_t currentByte;
+
+    while (true) 
+    {
+        currentByte = fastReadTetraPack();
+        
+        if (prevByte == 0x0F && currentByte == 0x00) 
+        {
+            currentState = 3;       //switch to reading state
+            listening.store(true);  //receiver is now listening
+            return;                 //high all was matched with all low
+        }
+
+        if (prevByte == 0x00 && currentByte != 0x00) 
+        {
+            read_buffer.clear();
+            currentState = 1;       //switch back to sync state
+            listening.store(false);
+            return;                 //all high wasnt matched with all low
+        }
+
+        prevByte = currentByte;
+        }
+    }
+
+
 
     uint8_t readTetraPack()
     {
@@ -185,36 +206,6 @@ class Receiver
         std::this_thread::sleep_until(nextTick);
 
         return (incoming);
-    }
-
-
-
-    void awaitSwitch() 
-    {
-    uint8_t prevByte = 0x00;
-    uint8_t currentByte;
-
-    while (true) 
-    {
-        currentByte = fastReadTetraPack();
-        
-        if (prevByte == 0x0F && currentByte == 0x00) 
-        {
-            currentState = 3;       //switch to reading state
-            listening.store(true);  //receiver is now listening
-            return;                 //high all was matched with all low
-        }
-
-        if (prevByte == 0x00 && currentByte != 0x00) 
-        {
-            read_buffer.clear();
-            currentState = 1;       //switch back to sync state
-            listening.store(false);
-            return;                 //all high wasnt matched with all low
-        }
-
-        prevByte = currentByte;
-        }
     }
 
 
@@ -297,6 +288,15 @@ class Receiver
 
     bool checkPattern() 
      {
+        std::vector<uint8_t> eot_reference(1 + BYTE_PER_PACKAGE + 1, 0x04);
+        eot_reference.front() = 0x01;       //start of header
+        eot_reference.back() = 0x03;        //end of text
+        if(read_buffer == eot_reference)        //receiver noticed other client's end of transmission
+        {
+            partner_finished.store(true);
+            return true;
+        }
+
         if (read_buffer[0] != 0x01) 
         {
             return false;
@@ -319,6 +319,11 @@ class Receiver
         uint32_t checksum = (read_buffer[12] << 8) | (read_buffer[13] << 4) | read_buffer[14];
 
         if (read_buffer[15] != 0x02) 
+        {
+            return false;
+        }
+
+        if (read_buffer[read_buffer.size()-1] != 0x03) 
         {
             return false;
         }

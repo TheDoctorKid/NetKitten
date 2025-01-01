@@ -41,15 +41,15 @@ class Transmitter
     };
 
     std::vector<uint8_t> transmission_content;
-    //uint32_t sequence_num = 0;
     TimedQueue & pending_ack;           //stores the sequence_num's which havn't been acknowledged yet
     TimedQueue & ack_queue;             //stores the acknowledgments which still need to be sent
     TimedQueue & neg_ack_queue;         //stores negative acknowledgments which need to be sent
     std::queue<uint32_t> sequence_num_queue;      //stores all sequence numbers in order to be sent
     std::atomic<bool> & established;              //is sent data received
     std::atomic<bool> & listening;                //is own receiver currently reading data
+    std::atomic<bool> & partner_finished;         //does other client finished transmission
     unsigned short resync_count = 0;              //counts sent nibbles to controll when to resync periodically
-    bool list_mode = false;                       //true if started in listening mode
+    //bool list_mode = false;                       //true if started in listening mode
     std::mutex & hardware_lock;
     int mode = 0;
     B15F* b15f;
@@ -57,17 +57,124 @@ class Transmitter
 
 
     public:
-    Transmitter(B15F* board, boost::asio::serial_port* ser, TimedQueue & pen_ack, TimedQueue & ack_q, TimedQueue & neg_ack_q, std::atomic<bool> & es, std::atomic<bool> & li, bool lm, std::mutex & hl, int mo)
-        : b15f(board), serial(ser), pending_ack(pen_ack), ack_queue(ack_q), neg_ack_queue(neg_ack_q), established(es), listening(li), list_mode(lm), hardware_lock(hl), mode(mo)
+    Transmitter(B15F* board, boost::asio::serial_port* ser, TimedQueue & pen_ack, TimedQueue & ack_q, TimedQueue & neg_ack_q, std::atomic<bool> & es, std::atomic<bool> & li, std::atomic<bool> & pf, std::mutex & hl, int mo)
+        : b15f(board), serial(ser), pending_ack(pen_ack), ack_queue(ack_q), neg_ack_queue(neg_ack_q), established(es), listening(li), partner_finished(pf), hardware_lock(hl), mode(mo)
     {
 
     }
 
 
 
-    void syncComs()
+    void beginTransmission()        //prepare by reading cin
     {
-        if(listening.load())
+        if(!list_mode)
+        {
+            transmission_content.assign((std::istreambuf_iterator<char>(std::cin)), {});
+            std::cout << "Sending given Message..." << std::endl;
+        }
+
+        else
+        {
+            std::cout << "Just listening..." << std::endl;
+        }
+        
+        processData();
+    }
+
+    
+    
+    void processData()             //pads content and generates sequence numbers
+    {
+        if(transmission_content.size() % BYTE_PER_PACKAGE != 0)     //if there is something to send, save in content and pad it
+        {
+            transmission_content.insert(transmission_content.end(), BYTE_PER_PACKAGE - (transmission_content.size() % BYTE_PER_PACKAGE), 0x00);       //adds padding if needed
+        }
+
+        for(uint32_t i = 0; i < transmission_content.size() / BYTE_PER_PACKAGE; i++)        //generate all the sequence numbers
+        {
+            sequence_num_queue.push(i);
+        }
+
+        transmissionController();
+        return;
+    }
+    
+    
+    
+    void transmissionController()       //controlls everything from resyncing and sending the packages
+    {
+        bool final_ack = false;         //handles the last mandatory ACK to complete handshake
+        bool transmission_complete = false;     //handles the last EOT signal if nothing anymore to send
+
+        while(true)         //transmission main loop
+        {
+            if(!established.load() || !listening.load())      //if desynced try resync
+            {
+                std::cout << "Trying to sync communication." << std::endl;
+                final_ack = true;
+                syncComs();
+
+            }
+
+            if(established.load() && listening.load() && final_ack)
+            {
+                for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC; i++)     //sending ACK a last time to finish connection
+                {
+                    writeByte(0x06);
+                }
+                final_ack = false;
+            }
+
+            else
+            {
+                if(pending_ack.size() < 10 && !sequence_num_queue.empty())          //send next package as usual
+                {
+                    sendStack(sequence_num_queue.front());
+                    sequence_num_queue.pop();
+                }
+                
+                if(sequence_num_queue.empty() && pending_ack.empty())               //there is no more to send, just respond other client
+                {
+                    if(!transmission_complete)
+                    {
+                        transmission_complete = true;
+                        writeByte(0x01);
+                        for(int i = 0; i < HEADER_SIZE+BYTE_PER_PACKAGE-2; i++)
+                        {
+                            writeByte(0x04);        //send a stack filled with EOT to signal end of transmission
+                        }
+                        writeByte(0x03);
+                    }
+
+                    else
+                    {
+                        if(partner_finished)
+                        {
+                            return;         //nothing to send and nothing to receive anymore
+                        }
+                        
+                        else
+                        {
+                            sendStack(uint32_t(~0));    //only respond from now on
+                        }
+                    }
+                }
+
+                else if((pending_ack.size() >= 10) || sequence_num_queue.empty())   //pending ACKs exceed 10 limit, resend lost packages
+                {
+                    std::cout << "Sending package " << pending_ack.front() << " again!" << std::endl;
+                    sendStack(pending_ack.front());     //send lost package again
+                    pending_ack.pop();
+                }
+            }
+        }
+    }
+
+
+
+    void syncComs()     //depending on receiver state send SYNC or ACK
+    {
+        if(listening.load() && !established.load())
         {
             for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC; i++)                  //sending ACK for own receiver is listening
             {
@@ -84,74 +191,6 @@ class Transmitter
             }
             std::cout << "Sending SYNC IDLE." << std::endl;
         }
-    }
-
-
-
-    void beginTransmission()
-    {
-        if(!list_mode)
-        {
-            transmission_content.assign((std::istreambuf_iterator<char>(std::cin)), {});
-            std::cout << "Sending given Message..." << std::endl;
-        }
-
-        else
-        {
-            std::cout << "Just listening..." << std::endl;
-        }
-        
-        processData();                      //argument can be a byte vector of file or string data
-    }
-
-
-
-    void processData()             //prepares a string for transmission
-    {
-        if(transmission_content.size() % BYTE_PER_PACKAGE != 0)
-        {
-            transmission_content.insert(transmission_content.end(), BYTE_PER_PACKAGE - (transmission_content.size() % BYTE_PER_PACKAGE), 0x00);       //adds padding if needed
-        }
-
-        transmissionController();
-        return;
-    }
-
-
-
-    void transmissionController()
-    {
-        for(uint32_t i = 0; i < transmission_content.size() / BYTE_PER_PACKAGE; i++)
-        {
-            sequence_num_queue.push(i);
-        }
-
-        while(!sequence_num_queue.empty() | !pending_ack.empty())                                     //send network packages
-        {
-            if(!established.load() | listening.load())                                                //if desynced try resync
-            {
-                std::cout << "Trying to sync communication." << std::endl;
-                syncComs();
-            }
-
-            else
-            {
-                if((pending_ack.size() >= 10) || sequence_num_queue.empty())                              //window size 10
-                {
-                    std::cout << "Sending package " << pending_ack.front() << " again!" << std::endl;
-                    sendStack(pending_ack.front());                                                       //send lost package again
-                    pending_ack.pop();
-                }
-
-                else
-                {
-                    sendStack(sequence_num_queue.front());
-                    sequence_num_queue.pop();
-                }
-            }
-        }
-
-        //return;
     }
 
 
@@ -186,12 +225,21 @@ class Transmitter
         stack_package.insert(stack_package.end(), check_conversion.end() - 2 , check_conversion.end());     //insert the corresponding 24 bit checksum
         stack_package.push_back(0x02);                                                                      //insert start of text
 
-        for(uint32_t i = package_index*BYTE_PER_PACKAGE; i<package_index*BYTE_PER_PACKAGE+BYTE_PER_PACKAGE; i++)                                        
-        { 
-            stack_package.push_back(transmission_content[i]);                                               //add BYTE_PER_PACKAGE byte of data
+        if(package_index == uint32_t(~0))       //send empty package
+        {
+            stack_package.insert(stack_package.end(), BYTE_PER_PACKAGE, 0x00);                              //add BYTE_PER_PACKAGE byte of null values
         }
 
-        pending_ack.push(package_index);                                                                    //add sent package sequence number to pending acknowledgements
+        else        //send normal message content
+        {
+            for(uint32_t i = package_index*BYTE_PER_PACKAGE; i<package_index*BYTE_PER_PACKAGE+BYTE_PER_PACKAGE; i++)                                        
+            { 
+                stack_package.push_back(transmission_content[i]);                                           //add BYTE_PER_PACKAGE byte of data
+            }
+
+            pending_ack.push(package_index);                                                                //add sent package sequence number to pending acknowledgements
+        }
+
         stack_package.push_back(0x03);                                                                      //end on end of text
 
         for(uint8_t byte : stack_package)                                                                   //actually sending the message

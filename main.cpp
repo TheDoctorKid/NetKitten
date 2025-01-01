@@ -8,8 +8,9 @@ int main(int argc, char** argv)
     TimedQueue pending_ack;
     TimedQueue ack_queue;
     TimedQueue neg_ack_queue;
-    std::atomic<bool> established = false;
-    std::atomic<bool> listening = false;
+    std::atomic<bool> established(false);
+    std::atomic<bool> listening(false);
+    std::atomic<bool> partner_finished(false);
     std::mutex hardware_lock;
     int mode = 0;
 
@@ -59,14 +60,14 @@ int main(int argc, char** argv)
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));  // Small delay before starting transmission
 
     // Create Receiver and Transmitter instances with the appropriate pointers
-    Receiver r(b15f_ptr, serial_ptr, pending_ack, ack_queue, neg_ack_queue, established, listening, hardware_lock, mode);
+    Receiver r(b15f_ptr, serial_ptr, pending_ack, ack_queue, neg_ack_queue, established, listening, partner_finished, hardware_lock, mode);
     std::thread receiver_thread(&Receiver::beginListening, &r);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));  // Small delay before starting transmission
 
     std::cout << "Starting transmission..." << std::endl;
 
-    Transmitter t(b15f_ptr, serial_ptr, pending_ack, ack_queue, neg_ack_queue, established, listening, list_mode, hardware_lock, mode);
+    Transmitter t(b15f_ptr, serial_ptr, pending_ack, ack_queue, neg_ack_queue, established, listening, partner_finished, hardware_lock, mode);
     std::thread transmitter_thread(&Transmitter::beginTransmission, &t);
 
     // Join both threads before finishing
