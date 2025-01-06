@@ -105,67 +105,80 @@ class Transmitter
     {
         bool final_ack = false;         //handles the last mandatory ACK to complete handshake
         bool transmission_complete = false;     //handles the last EOT signal if nothing anymore to send
+        int status = 0;                 //decides the state of the transmitter
 
         while(true)         //transmission main loop
         {
-            if(!established.load() || !listening.load())      //if desynced try resync
+            switch(status)
             {
+            case 0:         //SYNC State
                 std::cout << "Trying to sync communication." << std::endl;
                 final_ack = true;
                 syncComs();
+                break;
+            
+            case 1:         //USUAL transmission State
+                sendStack(sequence_num_queue.front());
+                sequence_num_queue.pop();
+                break;
+
+            case 2:         //RESEND lost or delayed packages State
+                std::cout << "Sending package " << pending_ack.front() << " again!" << std::endl;
+                sendStack(pending_ack.front());
+                pending_ack.pop();
+                break;
+
+            case 3:         //RESPOND only to received signal State
+                if(!transmission_complete)
+                {
+                    transmission_complete = true;
+                    writeByte(0x01);
+                    for(int i = 0; i < HEADER_SIZE+BYTE_PER_PACKAGE-2; i++)
+                    {
+                        writeByte(0x04);        //send a stack filled with EOT to signal end of transmission
+                    }
+                    writeByte(0x03);
+                    continue;
+                }
+                else
+                {
+                    sendStack(uint32_t(~0));    //only respond from now on
+                    continue;
+                }
+                break;
+            
+            default:
+                std::cout << "Transmitter ran into an unknown Problem!" << std::endl;
+                break;
             }
 
-            if(established.load() && listening.load() && final_ack)
+
+            if(!established.load() || !listening.load())      //if desynced try resync
+            {status = 0; continue;}
+
+            if(established.load() && listening.load() && final_ack)     //sending ACK a last time to finish connection
             {
-                for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC; i++)     //sending ACK a last time to finish connection
+                for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC; i++)     
                 {
                     writeByte(0x06);
                 }
                 final_ack = false;
+                status = 1;             //next state is going to be usual send
+                continue;
             }
 
-            else
+            if(pending_ack.empty() && sequence_num_queue.empty())               //there is no more to send, just respond other client
             {
-                if(pending_ack.size() < 10 && !sequence_num_queue.empty())          //send next package as usual
-                {
-                    sendStack(sequence_num_queue.front());
-                    sequence_num_queue.pop();
-                }
-                
-                if(sequence_num_queue.empty() && pending_ack.empty())               //there is no more to send, just respond other client
-                {
-                    if(!transmission_complete)
-                    {
-                        transmission_complete = true;
-                        writeByte(0x01);
-                        for(int i = 0; i < HEADER_SIZE+BYTE_PER_PACKAGE-2; i++)
-                        {
-                            writeByte(0x04);        //send a stack filled with EOT to signal end of transmission
-                        }
-                        writeByte(0x03);
-                    }
-
-                    else
-                    {
-                        if(partner_finished.load())
-                        {
-                            return;         //nothing to send and nothing to receive anymore
-                        }
-                        
-                        else
-                        {
-                            sendStack(uint32_t(~0));    //only respond from now on
-                        }
-                    }
-                }
-
-                else if((pending_ack.size() >= 10) || sequence_num_queue.empty())   //pending ACKs exceed 10 limit, resend lost packages
-                {
-                    std::cout << "Sending package " << pending_ack.front() << " again!" << std::endl;
-                    sendStack(pending_ack.front());     //send lost package again
-                    pending_ack.pop();
-                }
+                if(partner_finished.load())
+                {return;}               //nothing to send and nothing to receive anymore
+                status = 3;
             }
+
+            if(pending_ack.size() < 10 && !sequence_num_queue.empty())          //send next package as usual
+            {status = 1; continue;}
+
+            if((pending_ack.size() >= 10) || sequence_num_queue.empty())        //pending ACKs exceed 10 limit, resend lost packages
+            {status = 2; continue;}
         }
     }
 
@@ -173,21 +186,21 @@ class Transmitter
 
     void syncComs()     //depending on receiver state send SYNC or ACK
     {
-        if(listening.load() && !established.load())
-        {
-            for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC; i++)                  //sending ACK for own receiver is listening
-            {
-                writeByte(0x06);
-            }
-            std::cout << "Sending ACK." << std::endl;
-        }
-
-        else
+        if(!listening.load() && !established.load())
         {
             std::cout << "Sending SYNC IDLE." << std::endl;
             for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC; i++)                  //sending SYNC IDLE
             {
                 writeByte(0x16);
+            }
+        }
+        
+        else if(listening.load() && !established.load())
+        {
+            std::cout << "Sending ACK." << std::endl;
+            for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC; i++)                  //sending ACK for own receiver is listening
+            {
+                writeByte(0x06);
             }
         }
     }

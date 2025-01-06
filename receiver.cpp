@@ -55,7 +55,6 @@ class Receiver
                 std::cout << "A fatal error occured while receiving the message!" << std::endl;
                 break;
             }
-
         }
 
         for(uint8_t byte : transmission_content)        //output all bytes from the transmission
@@ -84,12 +83,13 @@ class Receiver
                 listening.store(true);
                 established.store(false);
                 read_buffer.clear();
-                break;
+                continue;
 
             case 2:             //buffer was full with ACK
                 listening.store(true);
                 established.store(true);
                 read_buffer.clear();
+                currentState = 3;           //everything synced up and now reading data
                 break;
 
             case 3:             //buffer didnt match a mask
@@ -97,8 +97,6 @@ class Receiver
                 continue;
             }
         }
-
-        currentState = 3;       //everything synced up and now reading data
     }
 
 
@@ -291,7 +289,9 @@ class Receiver
 
     void receiveTransmission()
     {
+        awaitSwitch();
         readTetraPack();        //first read gets scrapped because its only for syncing purpouses
+        
         for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC; i++)      //reads BYTE_BETWEEN_SYNC amounts of bytes
         {
             uint8_t first = readTetraPack();
@@ -309,9 +309,9 @@ class Receiver
             if(!checkPattern())            
             {
                 currentState = 1;   //if pattern wasnt recognised go back to sync state
+                return;
             }
             read_buffer.clear();
-            return;
         }
 
         currentState = 2;
@@ -328,6 +328,7 @@ class Receiver
         if(read_buffer == eot_reference)        //receiver noticed other client's end of transmission
         {
             partner_finished.store(true);
+            currentState = 0;               //write received message into output
             return true;
         }
 
