@@ -49,7 +49,7 @@ class Transmitter
     std::atomic<bool> & listening;                //is own receiver currently reading data
     std::atomic<bool> & partner_finished;         //does other client finished transmission
     unsigned short resync_count = 0;              //counts sent nibbles to controll when to resync periodically
-    //bool list_mode = false;                       //true if started in listening mode
+    bool list_mode = false;                       //true if started in listening mode
     std::mutex & hardware_lock;
     int mode = 0;
     B15F* b15f;
@@ -113,7 +113,6 @@ class Transmitter
                 std::cout << "Trying to sync communication." << std::endl;
                 final_ack = true;
                 syncComs();
-
             }
 
             if(established.load() && listening.load() && final_ack)
@@ -148,7 +147,7 @@ class Transmitter
 
                     else
                     {
-                        if(partner_finished)
+                        if(partner_finished.load())
                         {
                             return;         //nothing to send and nothing to receive anymore
                         }
@@ -185,11 +184,11 @@ class Transmitter
 
         else
         {
+            std::cout << "Sending SYNC IDLE." << std::endl;
             for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC; i++)                  //sending SYNC IDLE
             {
                 writeByte(0x16);
             }
-            std::cout << "Sending SYNC IDLE." << std::endl;
         }
     }
 
@@ -256,9 +255,10 @@ class Transmitter
 
     void writeByte(uint8_t byte)
     {
-        if(resync_count%BYTE_BETWEEN_SYNC == 0)
+        std::cout << "Sending " << int(byte) << std::endl;
+
+        if (resync_count % BYTE_BETWEEN_SYNC == 0 && resync_count != 0)
         {
-            resync_count = 0;
             writeTetraPack(0b00001111);
             writeTetraPack(0b00000000);
         }
@@ -266,7 +266,7 @@ class Transmitter
         writeTetraPack(getBits(byte, 4));
         writeTetraPack(getBits(byte, 0));
 
-        if(resync_count%(BYTE_BETWEEN_SYNC) == BYTE_BETWEEN_SYNC-1)
+        if (resync_count % BYTE_BETWEEN_SYNC == BYTE_BETWEEN_SYNC - 1)
         {
             writeTetraPack(0b00000000);
             writeTetraPack(0b00001111);
@@ -274,6 +274,7 @@ class Transmitter
 
         resync_count++;
     }
+
 
 
 
@@ -289,7 +290,6 @@ class Transmitter
         {
             if(hardware_lock.try_lock())
             {
-                std::cout << int(half_byte) << std::endl;
                 switch (mode)
                 {
                 case 1:
@@ -297,7 +297,10 @@ class Transmitter
                     break;
                 
                 case 2:
-                    boost::asio::write(*serial, boost::asio::buffer("W", 1));
+                    //send command
+                    const char command = 'W';
+                    boost::asio::write(*serial, boost::asio::buffer(&command, 1));
+                    //send value
                     boost::asio::write(*serial, boost::asio::buffer(&half_byte, 1));
                     break;
                 }

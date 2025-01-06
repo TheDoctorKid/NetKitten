@@ -38,6 +38,7 @@ class Receiver
             switch (currentState)           //1=sync, 2=switch await, 3=reading
             {
             case 1:
+                std::cout << "Receiver Sync" << std::endl;
                 syncListen();
                 break;
 
@@ -46,6 +47,7 @@ class Receiver
                 break;
 
             case 3:
+                std::cout << "Receiving Comms" << std::endl;
                 receiveTransmission();
                 break;
             
@@ -148,29 +150,35 @@ class Receiver
 
     void awaitSwitch() 
     {
-    uint8_t prevByte = 0x00;
-    uint8_t currentByte;
+        uint8_t prevByte = 0xFF; // Initialize to an invalid value
+        uint8_t currentByte;
 
-    while (true) 
-    {
-        currentByte = fastReadTetraPack();
-        
-        if (prevByte == 0x0F && currentByte == 0x00) 
+        while (true) 
         {
-            currentState = 3;       //switch to reading state
-            listening.store(true);  //receiver is now listening
-            return;                 //high all was matched with all low
-        }
+            currentByte = fastReadTetraPack();
+            // std::cout << "Awaiting switch" << std::endl;
+            // std::cout << "Switch Val " << int(currentByte) << std::endl;
 
-        if (prevByte == 0x00 && currentByte != 0x00) 
-        {
-            read_buffer.clear();
-            currentState = 1;       //switch back to sync state
-            listening.store(false);
-            return;                 //all high wasnt matched with all low
-        }
+            if (prevByte == 0x0F && currentByte == 0x00) 
+            {
+                // Detected falling edge: switch to reading state
+                currentState = 3;
+                listening.store(true);
+                return;
+            } 
+            else if (prevByte == 0x00 && currentByte == 0x0F) 
+            {
+                // Detected rising edge: keep waiting
+                prevByte = currentByte;
+                continue;
+            } 
+            else if (currentByte != 0x0F && currentByte != 0x00) 
+            {
+                //std::cout << "Ignoring unexpected value: " << int(currentByte) << std::endl;
+                continue;
+            }
 
-        prevByte = currentByte;
+            prevByte = currentByte;
         }
     }
 
@@ -190,22 +198,37 @@ class Receiver
                 switch (mode)
                 {
                 case 1:
+                    std::this_thread::sleep_for(milliseconds(2));
                     incoming = b15f->getMem8(&PINA);        //read memory from PINA
+                    incoming = (incoming >> 4);
+                    std::cout << "Incoming " << int(incoming) << std::endl;
+                    hardware_lock.unlock();
+                    std::this_thread::sleep_until(nextTick);
+                    return (incoming);
                     break;
                 
                 case 2:
-                    boost::asio::write(*serial, boost::asio::buffer("R", 1));
-                    boost::asio::read(*serial, boost::asio::buffer(&incoming, 1));
+                    // Sende Kommando
+                    const char command = 'R';
+                    boost::asio::write(*serial, boost::asio::buffer(&command, 1));
+                    
+                    // Lese mit Timeout
+                    // boost::asio::deadline_timer timer(io);
+                    // timer.expires_from_now(boost::posix_time::seconds(2));
+                    
+                    boost::system::error_code error;
+                    boost::asio::read(*serial, boost::asio::buffer(&incoming, 1), error);
+                    std::cout << "Incoming " << int(incoming) << std::endl;
+                    if (error) {
+                        std::cout << "Error: " << error.message() << std::endl;
+                    }
+                    hardware_lock.unlock();
+                    std::this_thread::sleep_until(nextTick);
+                    return (incoming);
                     break;
-                }
-
-                std::cout << int(incoming) << std::endl;
-                hardware_lock.unlock();
+                }   
             }
-        }
-        std::this_thread::sleep_until(nextTick);
-
-        return (incoming);
+        } 
     }
 
 
@@ -214,7 +237,7 @@ class Receiver
     {
         using namespace std::chrono;
         auto now = steady_clock::now();
-        auto nextTick = now + milliseconds(1);
+        auto nextTick = now + milliseconds(5);
         uint8_t incoming = 0;
 
         while(true) 
@@ -224,24 +247,35 @@ class Receiver
                 switch (mode)
                 {
                 case 1:
+                    std::this_thread::sleep_for(milliseconds(2));
                     incoming = b15f->getMem8(&PINA);        //read memory from PINA
+                    incoming = (incoming >> 4);
+                    hardware_lock.unlock();
+                    std::this_thread::sleep_until(nextTick);
+                    return (incoming);
                     break;
                 
                 case 2:
-                    serial->open("/dev/ttyUSB1");
-                    boost::asio::write(*serial, boost::asio::buffer("R", 1));
-                    boost::asio::read(*serial, boost::asio::buffer(&incoming, 1));
-                    std::cout << "Reading " << int(incoming) << std::endl;
+                    // Sende Kommando
+                    const char command = 'R';
+                    boost::asio::write(*serial, boost::asio::buffer(&command, 1));
+                    
+                    // Lese mit Timeout
+                    // boost::asio::deadline_timer timer(io);
+                    // timer.expires_from_now(boost::posix_time::seconds(2));
+                    
+                    boost::system::error_code error;
+                    boost::asio::read(*serial, boost::asio::buffer(&incoming, 1), error);
+                    if (error) {
+                        std::cout << "Error: " << error.message() << std::endl;
+                    }
+                    hardware_lock.unlock();
+                    std::this_thread::sleep_until(nextTick);
+                    return (incoming);
                     break;
                 }
-
-                hardware_lock.unlock();
             }
-        }
-        std::this_thread::sleep_until(nextTick);
-
-
-        return (incoming);
+        } 
     }
 
 
