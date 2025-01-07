@@ -24,7 +24,7 @@ class Receiver
     Receiver(B15F* board, boost::asio::serial_port* ser, TimedQueue & pen_ack, TimedQueue & ack_q, TimedQueue & neg_ack_q, std::atomic<bool> & es, std::atomic<bool> & li, std::atomic<bool> & pf, std::mutex & hl, int mo)
         : b15f(board), serial(ser), pending_ack(pen_ack), ack_queue(ack_q), neg_ack_queue(neg_ack_q), established(es), listening(li), partner_finished(pf), hardware_lock(hl), mode(mo)
     {
-       
+
     }
 
 
@@ -71,7 +71,7 @@ class Receiver
         while(!(established.load() && listening.load()))
         {
             awaitSwitch();      //try to catch falling edge
-
+            
             for(uint32_t i = 0; i <= BYTE_BETWEEN_SYNC; i++)         
             {
                 read_buffer.push_back(readTetraPack());
@@ -103,46 +103,33 @@ class Receiver
 
     int determineCase() 
     {
-        if (read_buffer.empty() || read_buffer[0] != 0x00) 
-        {
-            return 3;           //general failure
-        }
-        bool sync = true;
-        bool ack = true;
+        bool is_sync = true; 
+        bool is_ack = true;  
 
         for (size_t i = 1; i < read_buffer.size(); ++i) {
-            if (i % 2 == 0) 
-            {
-                if (read_buffer[i] != 0b0110) 
-                {
-                    return 3;
+            if (i % 2 == 0) {
+                if (read_buffer[i] != 0b0110) {
+                    return 3;  
                 }
-            } 
-            else 
-            {
-                if (read_buffer[i] != 0b0001) 
-                {
-                    sync = false;
+            } else {
+                if (read_buffer[i] != 0b0001) {
+                    is_sync = false;  // Fails SYNC pattern
                 }
-                if (read_buffer[i] != 0x00) 
-                {
-                    ack = false;
+                if (read_buffer[i] != 0x00) {
+                    is_ack = false;  // Fails ACK pattern
                 }
             }
         }
 
-        if (sync) 
-        {
-            return 1;
-        } else if (ack) 
-        {
-            return 2;
+        if (is_sync) {
+            return 1;  // SYNC case
         } 
-        else 
-        {
-            return 3;
+        if (is_ack) {
+            return 2;  // ACK case
         }
+        return 3;  // General failure case
     }
+
 
 
 
@@ -154,14 +141,11 @@ class Receiver
         while (true) 
         {
             currentByte = fastReadTetraPack();
-            // std::cout << "Awaiting switch" << std::endl;
-            // std::cout << "Switch Val " << int(currentByte) << std::endl;
 
             if (prevByte == 0x0F && currentByte == 0x00) 
             {
                 // Detected falling edge: switch to reading state
-                currentState = 3;
-                listening.store(true);
+                //currentState = 3;
                 return;
             } 
             else if (prevByte == 0x00 && currentByte == 0x0F) 
@@ -209,10 +193,11 @@ class Receiver
                     // Sende Kommando
                     const char command = 'R';
                     boost::asio::write(*serial, boost::asio::buffer(&command, 1));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
                     
                     // Lese mit Timeout
-                    // boost::asio::deadline_timer timer(io);
-                    // timer.expires_from_now(boost::posix_time::seconds(2));
+                    // boost::asio::deadline_timer timer(serial->get_executor().context());
+                    // timer.expires_from_now(boost::posix_time::millisec(2));
                     
                     boost::system::error_code error;
                     boost::asio::read(*serial, boost::asio::buffer(&incoming, 1), error);
@@ -257,10 +242,11 @@ class Receiver
                     // Sende Kommando
                     const char command = 'R';
                     boost::asio::write(*serial, boost::asio::buffer(&command, 1));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
                     
                     // Lese mit Timeout
-                    // boost::asio::deadline_timer timer(io);
-                    // timer.expires_from_now(boost::posix_time::seconds(2));
+                    // boost::asio::deadline_timer timer(serial->get_executor().context());
+                    // timer.expires_from_now(boost::posix_time::millisec(2));
                     
                     boost::system::error_code error;
                     boost::asio::read(*serial, boost::asio::buffer(&incoming, 1), error);

@@ -193,6 +193,7 @@ class Transmitter
             {
                 writeByte(0x16);
             }
+            return;
         }
         
         else if(listening.load() && !established.load())
@@ -313,6 +314,7 @@ class Transmitter
                     //send command
                     const char command = 'W';
                     boost::asio::write(*serial, boost::asio::buffer(&command, 1));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
                     //send value
                     boost::asio::write(*serial, boost::asio::buffer(&half_byte, 1));
                     break;

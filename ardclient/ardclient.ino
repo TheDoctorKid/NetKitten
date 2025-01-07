@@ -20,8 +20,8 @@ void loop()
     if (command == 'R') {          // 'R' for Read
       // Read the state of pins D4-D7 (last 4 bits of PIND)
       uint8_t pinState = (PIND >> 4) & 0x0F;  // Extract bits 4-7 (D4-D7)
-      
-      Serial.write(pinState);      // Send the 4-bit data back to the PC
+
+      Serial.write(pinState);      // Send the 4-bit data back to the PC      
     } 
     else if (command == 'W') {     // 'W' for Write
       while (Serial.available() < 1) {
@@ -32,7 +32,7 @@ void loop()
       data &= 0x0F;                  // Ensure only the last 4 bits are used
 
       // Write the 4-bit data to D8-D11 (PORTB pins 0-3)
-      PORTB = (PORTB & 0xF0) | data; // Preserve the upper bits of PORTB and set the lower bits
+      PORTB = data; // Preserve the upper bits of PORTB and set the lower bits
     }
   }
 }
