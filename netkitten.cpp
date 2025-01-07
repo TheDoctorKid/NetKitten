@@ -72,19 +72,21 @@ public:
         if (mutex.try_lock_for(std::chrono::milliseconds(100))) 
         {
             std::deque<uint32_t> tempDeque;
-
             bool found = false;
+
+            // Iterate over the queue and move elements to tempDeque, skipping the one to remove
             while (!queue.empty()) {
                 if (queue.front() == value && !found) {
-                    found = true;
+                    found = true; // The value is found, and we skip adding it to tempDeque
                 } 
                 else 
                 {
-                    tempDeque.push_back(queue.front());
+                    tempDeque.push_back(queue.front()); // Add all other values to tempDeque
                 }
                 queue.pop();
             }
 
+            // Refill the original queue with the modified tempDeque
             for (int val : tempDeque) {
                 queue.push(val);
             }

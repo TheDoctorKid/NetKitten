@@ -153,9 +153,6 @@ class Transmitter
             }
 
 
-            if(!established.load() || !listening.load())      //if desynced try resync
-            {status = 0; continue;}
-
             if(established.load() && listening.load() && final_ack)     //sending ACK a last time to finish connection
             {
                 for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC; i++)     
@@ -163,9 +160,11 @@ class Transmitter
                     writeByte(0x06);
                 }
                 final_ack = false;
-                status = 1;             //next state is going to be usual send
-                continue;
+                //continue;
             }
+
+            if(!established.load() || !listening.load())      //if desynced try resync
+            {status = 0; continue;}
 
             if(pending_ack.empty() && sequence_num_queue.empty())               //there is no more to send, just respond other client
             {
@@ -199,7 +198,7 @@ class Transmitter
         else if(listening.load() && !established.load())
         {
             std::cout << "Sending ACK." << std::endl;
-            for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC; i++)                  //sending ACK for own receiver is listening
+            for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC*3; i++)                  //sending ACK for own receiver is listening
             {
                 writeByte(0x06);
             }
@@ -214,28 +213,29 @@ class Transmitter
         std::vector<uint8_t> index_conversion = uint32ToByte(uint32_t(package_index));
         stack_package.insert(stack_package.end(), index_conversion.begin(), index_conversion.end());        //insert sequence number
 
-        if(neg_ack_queue.empty())
+        // if(neg_ack_queue.empty())
+        // {
+        stack_package.push_back(0x06);                                                                  //send acknowledgment
+        std::vector<uint8_t> ack_conversion = ack_queue.empty() ? uint32ToByte(uint32_t(~0)) : uint32ToByte(ack_queue.front());
+        stack_package.insert(stack_package.end(), ack_conversion.begin(), ack_conversion.end());        //insert acknowledgment number
+        if(!ack_queue.empty()) 
         {
-            stack_package.push_back(0x06);                                                                  //send acknowledgment
-            std::vector<uint8_t> ack_conversion = ack_queue.empty() ? uint32ToByte(uint32_t(0)) : uint32ToByte(ack_queue.front());
-            stack_package.insert(stack_package.end(), ack_conversion.begin(), ack_conversion.end());        //insert acknowledgment number
-            if(!ack_queue.empty()) 
-            {
-                ack_queue.pop();
-            };
-        }            
-        else
-        {
-            stack_package.push_back(0x15);                                                                  //send negative acknowledgment
-            std::vector<uint8_t> neg_ack_conversion = uint32ToByte(neg_ack_queue.front());
-            stack_package.insert(stack_package.end(), neg_ack_conversion.begin(), neg_ack_conversion.end());//insert acknowledgment number
-            neg_ack_queue.pop();
-        }                                                          
+            ack_queue.pop();
+        };
+        // }            
+        // else
+        // {
+        //     stack_package.push_back(0x15);                                                                  //send negative acknowledgment
+        //     std::vector<uint8_t> neg_ack_conversion = uint32ToByte(neg_ack_queue.front());
+        //     stack_package.insert(stack_package.end(), neg_ack_conversion.begin(), neg_ack_conversion.end());//insert acknowledgment number
+        //     neg_ack_queue.pop();
+        // }                                                          
         
         stack_package.insert(stack_package.end(), 2, 0x16);                                                 //insert a sync idle check
-        uint32_t checksum = calcChecksum(package_index);
-        std::vector<uint8_t> check_conversion = uint32ToByte(checksum);
-        stack_package.insert(stack_package.end(), check_conversion.end() - 2 , check_conversion.end());     //insert the corresponding 24 bit checksum
+        uint16_t checksum = calcChecksum(package_index);
+        std::vector<uint8_t> check_conversion = {static_cast<uint8_t>((checksum >> 8) & 0xFF),
+                                                 static_cast<uint8_t>(checksum & 0xFF)};
+        stack_package.insert(stack_package.end(), check_conversion.end()-2, check_conversion.end());        //insert the corresponding 16 bit checksum
         stack_package.push_back(0x02);                                                                      //insert start of text
 
         if(package_index == uint32_t(~0))       //send empty package
@@ -262,7 +262,7 @@ class Transmitter
         std::cout << std::endl;
         
         std::cout << "Package " << package_index << " was sent." << std::endl;
-        std::cout << "Checksum " << checksum << std::endl;
+        std::cout << "Checksum " << int(checksum) << std::endl;
     }
 
 
@@ -340,15 +340,13 @@ class Transmitter
 
 
 
-    uint32_t calcChecksum(uint32_t current_package)
+    uint16_t calcChecksum(uint32_t current_package)
     {
-        uint32_t checksum = 0;
+        uint16_t checksum = 0;
         for(uint32_t i = current_package*BYTE_PER_PACKAGE; i<current_package*BYTE_PER_PACKAGE+BYTE_PER_PACKAGE; i++) 
         {
             checksum += transmission_content[i];
         }
-
-        checksum = ~checksum + 1;       //calc the two's complement of the sum
 
         return checksum;
     }
