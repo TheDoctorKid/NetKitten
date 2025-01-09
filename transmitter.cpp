@@ -79,6 +79,7 @@ class Transmitter
         }
         
         processData();
+        return;
     }
 
     
@@ -94,7 +95,6 @@ class Transmitter
         {
             sequence_num_queue.push(i);
         }
-
         transmissionController();
         return;
     }
@@ -106,14 +106,16 @@ class Transmitter
         bool final_ack = false;         //handles the last mandatory ACK to complete handshake
         bool transmission_complete = false;     //handles the last EOT signal if nothing anymore to send
         int status = 0;                 //decides the state of the transmitter
+        bool terminated = false;
 
-        while(true)         //transmission main loop
+        while(!terminated)         //transmission main loop
         {
             switch(status)
             {
             case 0:         //SYNC State
                 std::cout << "Trying to sync communication." << std::endl;
                 final_ack = true;
+                transmission_complete = false;      //eliminates chance for partner to desync on sending EOT
                 syncComs();
                 break;
             
@@ -124,13 +126,14 @@ class Transmitter
 
             case 2:         //RESEND lost or delayed packages State
                 std::cout << "Sending package " << pending_ack.front() << " again!" << std::endl;
-                sendStack(pending_ack.front());
                 pending_ack.pop();
+                sendStack(pending_ack.front());
                 break;
 
             case 3:         //RESPOND only to received signal State
                 if(!transmission_complete)
                 {
+                    std::cout << "Sending EOT Signal" << std::endl;
                     transmission_complete = true;
                     writeByte(0x01);
                     for(int i = 0; i < HEADER_SIZE+BYTE_PER_PACKAGE-2; i++)
@@ -138,13 +141,10 @@ class Transmitter
                         writeByte(0x04);        //send a stack filled with EOT to signal end of transmission
                     }
                     writeByte(0x03);
-                    continue;
+                    break;
                 }
-                else
-                {
-                    sendStack(uint32_t(~0));    //only respond from now on
-                    continue;
-                }
+
+                sendStack(uint32_t(~0));    //only respond from now on
                 break;
             
             default:
@@ -155,12 +155,11 @@ class Transmitter
 
             if(established.load() && listening.load() && final_ack)     //sending ACK a last time to finish connection
             {
-                for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC; i++)     
+                for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC*3; i++)     
                 {
                     writeByte(0x06);
                 }
                 final_ack = false;
-                //continue;
             }
 
             if(!established.load() || !listening.load())      //if desynced try resync
@@ -169,16 +168,30 @@ class Transmitter
             if(pending_ack.empty() && sequence_num_queue.empty())               //there is no more to send, just respond other client
             {
                 if(partner_finished.load())
-                {return;}               //nothing to send and nothing to receive anymore
+                {
+                    std::cout << "Program ended successfully!" << std::endl;
+                    for(int i = 0; i < HEADER_SIZE+BYTE_PER_PACKAGE-2; i++)
+                    {
+                        writeByte(0x04);        //send last stack filled with EOT to signal end of transmission
+                    }
+                    writeByte(0x03);
+                    terminated = true;
+                    return;
+                }               //nothing to send and nothing to receive anymore
                 status = 3;
+                continue;
             }
 
             if(pending_ack.size() < 10 && !sequence_num_queue.empty())          //send next package as usual
             {status = 1; continue;}
 
             if((pending_ack.size() >= 10) || sequence_num_queue.empty())        //pending ACKs exceed 10 limit, resend lost packages
-            {status = 2; continue;}
+            {
+                status = 2; 
+                continue;
+            }
         }
+        return;
     }
 
 
@@ -201,7 +214,14 @@ class Transmitter
             for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC*3; i++)                  //sending ACK for own receiver is listening
             {
                 writeByte(0x06);
+
+                if(i%3==0 && !(listening.load() && established.load()))
+                {
+                    listening.store(false);
+                    established.store(false);
+                }
             }
+            return;
         }
     }
 
@@ -213,23 +233,9 @@ class Transmitter
         std::vector<uint8_t> index_conversion = uint32ToByte(uint32_t(package_index));
         stack_package.insert(stack_package.end(), index_conversion.begin(), index_conversion.end());        //insert sequence number
 
-        // if(neg_ack_queue.empty())
-        // {
         stack_package.push_back(0x06);                                                                  //send acknowledgment
         std::vector<uint8_t> ack_conversion = ack_queue.empty() ? uint32ToByte(uint32_t(~0)) : uint32ToByte(ack_queue.front());
         stack_package.insert(stack_package.end(), ack_conversion.begin(), ack_conversion.end());        //insert acknowledgment number
-        if(!ack_queue.empty()) 
-        {
-            ack_queue.pop();
-        };
-        // }            
-        // else
-        // {
-        //     stack_package.push_back(0x15);                                                                  //send negative acknowledgment
-        //     std::vector<uint8_t> neg_ack_conversion = uint32ToByte(neg_ack_queue.front());
-        //     stack_package.insert(stack_package.end(), neg_ack_conversion.begin(), neg_ack_conversion.end());//insert acknowledgment number
-        //     neg_ack_queue.pop();
-        // }                                                          
         
         stack_package.insert(stack_package.end(), 2, 0x16);                                                 //insert a sync idle check
         uint16_t checksum = calcChecksum(package_index);
@@ -254,14 +260,16 @@ class Transmitter
         }
 
         stack_package.push_back(0x03);                                                                      //end on end of text
+        ack_queue.pop();
 
         for(uint8_t byte : stack_package)                                                                   //actually sending the message
         {
             writeByte(byte);
         }
+
         std::cout << std::endl;
-        
         std::cout << "Package " << package_index << " was sent." << std::endl;
+        std::cout << "sequence num size " << sequence_num_queue.size() << " pending ack size " << pending_ack.size() << std::endl;
         std::cout << "Checksum " << int(checksum) << std::endl;
     }
 
@@ -291,7 +299,6 @@ class Transmitter
 
 
 
-
     void writeTetraPack(uint8_t half_byte)
     {
         //TODO implement to write 4 bit onto register
@@ -314,7 +321,6 @@ class Transmitter
                     //send command
                     const char command = 'W';
                     boost::asio::write(*serial, boost::asio::buffer(&command, 1));
-                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
                     //send value
                     boost::asio::write(*serial, boost::asio::buffer(&half_byte, 1));
                     break;

@@ -40,28 +40,27 @@ class Receiver
             case 1:
                 std::cout << "Receiver Sync" << std::endl;
                 syncListen();
-                break;
+                continue;
 
             case 2:
-                awaitSwitch();
-                break;
+                std::cout << "Received Content: ";
+                for(uint8_t byte : transmission_content)        //output all bytes from the transmission
+                {
+                    std::cout << char(byte);
+                }
+                currentState = 3;               //go back to listening in another transmission is sent
+                continue;
 
             case 3:
                 std::cout << "Receiving Comms" << std::endl;
                 receiveTransmission();
-                break;
+                continue;
             
             default:
                 std::cout << "A fatal error occured while receiving the message!" << std::endl;
                 break;
             }
         }
-
-        for(uint8_t byte : transmission_content)        //output all bytes from the transmission
-        {
-            std::cout << byte;
-        }
-        //currentState = 1;               //go back to listening in another transmission is sent
         return;
     }
 
@@ -147,6 +146,7 @@ class Receiver
             if (prevByte == 0x0F && currentByte == 0x00) 
             {
                 //exit on falling edge
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 return;
             } 
             else
@@ -173,10 +173,8 @@ class Receiver
                 switch (mode)
                 {
                 case 1:
-                    std::this_thread::sleep_for(milliseconds(2));
                     incoming = b15f->getMem8(&PINA);        //read memory from PINA
                     incoming = (incoming >> 4);
-                    std::cout << "Incoming " << int(incoming) << std::endl;
                     hardware_lock.unlock();
                     std::this_thread::sleep_until(nextTick);
                     return (incoming);
@@ -184,17 +182,10 @@ class Receiver
                 
                 case 2:
                     // Sende Kommando
-                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
                     const char command = 'R';
                     boost::asio::write(*serial, boost::asio::buffer(&command, 1));
-                    
-                    // Lese mit Timeout
-                    // boost::asio::deadline_timer timer(serial->get_executor().context());
-                    // timer.expires_from_now(boost::posix_time::millisec(2));
-                    
                     boost::system::error_code error;
                     boost::asio::read(*serial, boost::asio::buffer(&incoming, 1), error);
-                    std::cout << "Incoming " << int(incoming) << std::endl;
                     if (error) {
                         std::cout << "Error: " << error.message() << std::endl;
                     }
@@ -202,7 +193,7 @@ class Receiver
                     std::this_thread::sleep_until(nextTick);
                     return (incoming);
                     break;
-                }   
+                }
             }
         } 
     }
@@ -213,7 +204,7 @@ class Receiver
     {
         using namespace std::chrono;
         auto now = steady_clock::now();
-        auto nextTick = now + milliseconds(5);
+        auto nextTick = now + milliseconds(10);
         uint8_t incoming = 0;
 
         while(true) 
@@ -223,7 +214,6 @@ class Receiver
                 switch (mode)
                 {
                 case 1:
-                    std::this_thread::sleep_for(milliseconds(2));
                     incoming = b15f->getMem8(&PINA);        //read memory from PINA
                     incoming = (incoming >> 4);
                     hardware_lock.unlock();
@@ -233,14 +223,8 @@ class Receiver
                 
                 case 2:
                     // Sende Kommando
-                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
                     const char command = 'R';
                     boost::asio::write(*serial, boost::asio::buffer(&command, 1));
-                    
-                    // Lese mit Timeout
-                    // boost::asio::deadline_timer timer(serial->get_executor().context());
-                    // timer.expires_from_now(boost::posix_time::millisec(2));
-                    
                     boost::system::error_code error;
                     boost::asio::read(*serial, boost::asio::buffer(&incoming, 1), error);
                     if (error) {
@@ -285,6 +269,8 @@ class Receiver
             if(read_buffer == ref)
             {
                 read_buffer.clear();
+                listening.store(false);
+                established.store(false);
                 currentState = 1;       //other client needs resync
                 return;
             }
@@ -298,6 +284,7 @@ class Receiver
 
         if(read_buffer.size() == BYTE_PER_PACKAGE + HEADER_SIZE)
         {
+            std::cout << "ack queue size " << ack_queue.size() <<std::endl;
             for(uint8_t byte : read_buffer)        //output all bytes from the transmission
             {
                 std::cout << int(byte);
@@ -323,13 +310,14 @@ class Receiver
 
     bool checkPattern() 
      {
-        std::vector<uint8_t> eot_reference(1 + BYTE_PER_PACKAGE + 1, 0x04);
+        std::vector<uint8_t> eot_reference(HEADER_SIZE + BYTE_PER_PACKAGE, 0x04);
         eot_reference.front() = 0x01;       //start of header
         eot_reference.back() = 0x03;        //end of text
         if(read_buffer == eot_reference)        //receiver noticed other client's end of transmission
         {
+            std::cout << "Partner Finished with EOT" << std::endl;
             partner_finished.store(true);
-            currentState = 0;               //write received message into output
+            currentState = 2;               //write received message into output
             return true;
         }
 
@@ -377,20 +365,37 @@ class Receiver
         }
 
         //package is valid!
-        ack_queue.push(received_package_sequence);              //tell transmitter to acknowledge this package
         if(read_buffer[5] == 0x06)
         {
-            std::cout << "removed " << acknowledged_sequence << std::endl;
-            if(pending_ack.remove(acknowledged_sequence))              //tell transmitter to not wait for package he sent anymore with sequence number ACKNOWLEDGED SEQUENCE
-            {std::cout << "Successfully " << pending_ack.size() << std::endl;}
+            if (acknowledged_sequence == uint32_t(~0))
+            {
+                std::cout << "Prevented removal of ~0" << std::endl;
+            }
+
+            else
+            {
+                std::cout << "removed " << acknowledged_sequence << std::endl;
+                if(pending_ack.remove(acknowledged_sequence))              //tell transmitter to not wait for package he sent anymore with sequence number ACKNOWLEDGED SEQUENCE
+                {std::cout << "Successfully " << pending_ack.size() << std::endl;}
+            }
         }
 
-        if (transmission_content.size() < received_package_sequence * BYTE_PER_PACKAGE)
+        if (received_package_sequence == uint32_t(~0))
         {
-            transmission_content.resize(received_package_sequence * BYTE_PER_PACKAGE);
+            std::cout << "Scrapped ~0 Package" << std::endl;
+            return true;
         }
-        transmission_content.insert(transmission_content.begin() + received_package_sequence*BYTE_PER_PACKAGE, read_buffer.begin()+HEADER_SIZE, read_buffer.end());
 
+        else
+        {ack_queue.push(received_package_sequence);}        //tell transmitter to acknowledge this package
+                      
+        if (transmission_content.size() < (received_package_sequence+1) * BYTE_PER_PACKAGE)
+        {
+            transmission_content.resize((received_package_sequence+1) * BYTE_PER_PACKAGE);
+        }
+
+        auto insert_pos = transmission_content.begin() + received_package_sequence * BYTE_PER_PACKAGE;
+        std::copy(read_buffer.begin() + HEADER_SIZE - 1, read_buffer.end() - 1, insert_pos);
 
         return true;
     }
