@@ -22,7 +22,7 @@
 const uint32_t HEADER_SIZE = 16;
 const uint32_t BYTE_PER_PACKAGE = 64;      //256 bytes usually
 const uint32_t BYTE_BETWEEN_SYNC = 4;
-const uint32_t SEND_DELAY = 80;
+const uint32_t SEND_DELAY = 60;
 
 
 

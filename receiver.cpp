@@ -5,19 +5,20 @@
 class Receiver
 {
     private:
-    TimedQueue & pending_ack;          //stores the sequence_num's which havn't been acknowledged yet
-    TimedQueue & ack_queue;            //stores the acknowledgments which still need to be sent
-    TimedQueue & neg_ack_queue;        //stores negative acknowledgments which need to be sent
-    unsigned short currentState;
-    std::atomic<bool> & established;
-    std::atomic<bool> & listening;
-    std::atomic<bool> & partner_finished;
-    std::vector<uint8_t> read_buffer;                //reads tetra bits in order which they arrived
-    std::vector<uint8_t> transmission_content;       //perceived transmission content
-    std::mutex & hardware_lock;
-    int mode = 0;
     B15F* b15f;
     boost::asio::serial_port* serial;
+    TimedQueue & pending_ack;           //stores the sequence_num's which havn't been acknowledged yet
+    TimedQueue & ack_queue;             //stores the acknowledgments which still need to be sent
+    TimedQueue & neg_ack_queue;         //stores negative acknowledgments which need to be sent
+    std::atomic<bool> & established;              //is sent data received
+    std::atomic<bool> & listening;                //is own receiver currently reading data
+    std::atomic<bool> & partner_finished;         //does other client finished transmission
+    std::mutex & hardware_lock;
+    int mode = 0;
+
+    unsigned short currentState;
+    std::vector<uint8_t> read_buffer;                //reads tetra bits in order which they arrived
+    std::vector<uint8_t> transmission_content;       //perceived transmission content
 
 
     public:
@@ -38,26 +39,27 @@ class Receiver
             switch (currentState)           //1=sync, 2=switch await, 3=reading
             {
             case 1:
-                std::cout << "Receiver Sync" << std::endl;
+                // std::cout << "Receiver Sync" << std::endl;
                 syncListen();
                 continue;
 
             case 2:
-                std::cout << "Received Content: ";
-                for(uint8_t byte : transmission_content)        //output all bytes from the transmission
+                // std::cout << "Received Content: ";
+                for(uint8_t byte: transmission_content)        //output all bytes from the transmission
                 {
-                    std::cout << char(byte);
+                    std::cout.write(reinterpret_cast<const char*>(&byte), 8);
                 }
+                std::cout.flush();
                 currentState = 3;               //go back to listening in another transmission is sent
                 continue;
 
             case 3:
-                std::cout << "Receiving Comms" << std::endl;
+                // std::cout << "Receiving Comms" << std::endl;
                 receiveTransmission();
                 continue;
             
             default:
-                std::cout << "A fatal error occured while receiving the message!" << std::endl;
+                // std::cout << "A fatal error occured while receiving the message!" << std::endl;
                 break;
             }
         }
@@ -187,7 +189,7 @@ class Receiver
                     boost::system::error_code error;
                     boost::asio::read(*serial, boost::asio::buffer(&incoming, 1), error);
                     if (error) {
-                        std::cout << "Error: " << error.message() << std::endl;
+                        // std::cout << "Error: " << error.message() << std::endl;
                     }
                     hardware_lock.unlock();
                     std::this_thread::sleep_until(nextTick);
@@ -228,7 +230,7 @@ class Receiver
                     boost::system::error_code error;
                     boost::asio::read(*serial, boost::asio::buffer(&incoming, 1), error);
                     if (error) {
-                        std::cout << "Error: " << error.message() << std::endl;
+                        // std::cout << "Error: " << error.message() << std::endl;
                     }
                     hardware_lock.unlock();
                     std::this_thread::sleep_until(nextTick);
@@ -284,23 +286,23 @@ class Receiver
 
         if(read_buffer.size() == BYTE_PER_PACKAGE + HEADER_SIZE)
         {
-            std::cout << "ack queue size " << ack_queue.size() <<std::endl;
-            for(uint8_t byte : read_buffer)        //output all bytes from the transmission
-            {
-                std::cout << int(byte);
-            }
+            // std::cout << "ack queue size " << ack_queue.size() <<std::endl;
+            // for(uint8_t byte : read_buffer)        //output all bytes from the transmission
+            // {
+            //     std::cout << int(byte);
+            // }
 
             if(!checkPattern())            
             {
-                std::cout << "Pattern not recognised" << std::endl;
+                // std::cout << "Pattern not recognised" << std::endl;
                 currentState = 1;   //if pattern wasnt recognised go back to sync state
                 listening.store(false);
                 established.store(false);
                 read_buffer.clear();
-                std::cout << std::endl;
+                // std::cout << std::endl;
                 return;
             }
-            std::cout << "Pattern recognised, Data stored!" << std::endl;
+            // std::cout << "Pattern recognised, Data stored!" << std::endl;
             read_buffer.clear();
         }
         return;
@@ -309,13 +311,13 @@ class Receiver
 
 
     bool checkPattern() 
-     {
+    {
         std::vector<uint8_t> eot_reference(HEADER_SIZE + BYTE_PER_PACKAGE, 0x04);
         eot_reference.front() = 0x01;       //start of header
         eot_reference.back() = 0x03;        //end of text
         if(read_buffer == eot_reference)        //receiver noticed other client's end of transmission
         {
-            std::cout << "Partner Finished with EOT" << std::endl;
+            // std::cout << "Partner Finished with EOT" << std::endl;
             partner_finished.store(true);
             currentState = 2;               //write received message into output
             return true;
@@ -323,7 +325,7 @@ class Receiver
 
         if (read_buffer[0] != 0x01) 
         {
-            std::cout << "pos 1" <<std::endl;
+            // std::cout << "pos 1" <<std::endl;
             return false;
         }
 
@@ -331,7 +333,7 @@ class Receiver
 
         if (read_buffer[5] != 0x06 && read_buffer[5] != 0x15) 
         {
-            std::cout << "pos 2" <<std::endl;
+            // std::cout << "pos 2" <<std::endl;
             return false;
         }
 
@@ -339,7 +341,7 @@ class Receiver
 
         if (read_buffer[10] != 0x16 || read_buffer[11] != 0x16) 
         {
-            std::cout << "pos 3" <<std::endl;
+            // std::cout << "pos 3" <<std::endl;
             return false;
         }
 
@@ -347,20 +349,20 @@ class Receiver
 
         if (read_buffer[14] != 0x02) 
         {
-            std::cout << "pos 4" <<std::endl;
+            // std::cout << "pos 4" <<std::endl;
             return false;
         }
 
         if (read_buffer[read_buffer.size()-1] != 0x03) 
         {
-            std::cout << "pos 5" <<std::endl;
+            // std::cout << "pos 5" <<std::endl;
             return false;
         }
 
         if(!checkChecksum(checksum))
         {
             neg_ack_queue.push(received_package_sequence);      //the pattern matched but checksum was wrong
-            std::cout << "pos 6" <<std::endl;
+            // std::cout << "pos 6" <<std::endl;
             return false;
         }
 
@@ -369,20 +371,22 @@ class Receiver
         {
             if (acknowledged_sequence == uint32_t(~0))
             {
-                std::cout << "Prevented removal of ~0" << std::endl;
+                // std::cout << "Prevented removal of ~0" << std::endl;
             }
 
             else
             {
-                std::cout << "removed " << acknowledged_sequence << std::endl;
+                // std::cout << "removed " << acknowledged_sequence << std::endl;
                 if(pending_ack.remove(acknowledged_sequence))              //tell transmitter to not wait for package he sent anymore with sequence number ACKNOWLEDGED SEQUENCE
-                {std::cout << "Successfully " << pending_ack.size() << std::endl;}
+                {
+                    // std::cout << "Successfully " << pending_ack.size() << std::endl;
+                }
             }
         }
 
         if (received_package_sequence == uint32_t(~0))
         {
-            std::cout << "Scrapped ~0 Package" << std::endl;
+            // std::cout << "Scrapped ~0 Package" << std::endl;
             return true;
         }
 
@@ -409,7 +413,7 @@ class Receiver
         {
             checksum += read_buffer[i];
         }
-        std::cout << "checksum: " << int(checksum) << std::endl;
+        // std::cout << "checksum: " << int(checksum) << std::endl;
         return checksum == received_checksum;
     }
 

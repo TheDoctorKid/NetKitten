@@ -4,7 +4,7 @@
 
 int main(int argc, char** argv)
 {
-    bool list_mode = false;
+    // bool list_mode = false;
     TimedQueue pending_ack;
     TimedQueue ack_queue;
     TimedQueue neg_ack_queue;
@@ -25,9 +25,9 @@ int main(int argc, char** argv)
         }
 
         // If there's a third argument, check for "-l"
-        if (argc > 2 && strcmp(argv[2], "-l") == 0) { 
-            list_mode = true;  // Start listening-only mode
-        }
+        // if (argc > 2 && strcmp(argv[2], "-l") == 0) { 
+        //     list_mode = true;  // Start listening-only mode
+        // }
     }
 
     if(mode == 0)
@@ -48,7 +48,7 @@ int main(int argc, char** argv)
     else if (mode == 2) 
     {
         serial_ptr = &serial;
-        serial_ptr->open("/dev/ttyUSB0");  // Open serial port
+        serial_ptr->open("/dev/ttyUSB1");  // Open serial port
         serial_ptr->set_option(boost::asio::serial_port_base::baud_rate(9600));
         serial_ptr->set_option(boost::asio::serial_port_base::character_size(8));
         serial_ptr->set_option(boost::asio::serial_port_base::parity(boost::asio::serial_port_base::parity::none));
@@ -56,7 +56,7 @@ int main(int argc, char** argv)
         serial_ptr->set_option(boost::asio::serial_port_base::flow_control(boost::asio::serial_port_base::flow_control::none));
     }
 
-    std::cout << "Program starting..." << std::endl;
+    // std::cout << "Program starting..." << std::endl;
 
     std::this_thread::sleep_for(std::chrono::milliseconds(5000));  // Small delay before starting transmission
 
@@ -66,7 +66,7 @@ int main(int argc, char** argv)
 
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));  // Small delay before starting transmission
 
-    std::cout << "Starting transmission..." << std::endl;
+    // std::cout << "Starting transmission..." << std::endl;
 
     Transmitter t(b15f_ptr, serial_ptr, pending_ack, ack_queue, neg_ack_queue, established, listening, partner_finished, hardware_lock, mode);
     std::thread transmitter_thread(&Transmitter::beginTransmission, &t);

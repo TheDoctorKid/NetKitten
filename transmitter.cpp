@@ -40,20 +40,21 @@ class Transmitter
     0x1F  // US  (Unit Separator)
     };
 
-    std::vector<uint8_t> transmission_content;
+    B15F* b15f;
+    boost::asio::serial_port* serial;
     TimedQueue & pending_ack;           //stores the sequence_num's which havn't been acknowledged yet
     TimedQueue & ack_queue;             //stores the acknowledgments which still need to be sent
     TimedQueue & neg_ack_queue;         //stores negative acknowledgments which need to be sent
-    std::queue<uint32_t> sequence_num_queue;      //stores all sequence numbers in order to be sent
     std::atomic<bool> & established;              //is sent data received
     std::atomic<bool> & listening;                //is own receiver currently reading data
     std::atomic<bool> & partner_finished;         //does other client finished transmission
-    unsigned short resync_count = 0;              //counts sent nibbles to controll when to resync periodically
-    bool list_mode = false;                       //true if started in listening mode
     std::mutex & hardware_lock;
     int mode = 0;
-    B15F* b15f;
-    boost::asio::serial_port* serial;
+    std::vector<uint8_t> transmission_content;
+    std::queue<uint32_t> sequence_num_queue;      //stores all sequence numbers in order to be sent
+    std::vector<uint32_t> already_sent_acks;      //stores which packages were already acknowledged from himself
+    unsigned short resync_count = 0;              //counts sent nibbles to controll when to resync periodically
+    bool list_mode = false;                       //true if started in listening mode
 
 
     public:
@@ -70,12 +71,12 @@ class Transmitter
         if(!list_mode)
         {
             transmission_content.assign((std::istreambuf_iterator<char>(std::cin)), {});
-            std::cout << "Sending given Message..." << std::endl;
+            // std::cout << "Sending given Message..." << std::endl;
         }
 
         else
         {
-            std::cout << "Just listening..." << std::endl;
+            // std::cout << "Just listening..." << std::endl;
         }
         
         processData();
@@ -110,12 +111,18 @@ class Transmitter
 
         while(!terminated)         //transmission main loop
         {
+            uint32_t toResend;
             switch(status)
             {
             case 0:         //SYNC State
-                std::cout << "Trying to sync communication." << std::endl;
+                // std::cout << "Trying to sync communication." << std::endl;
                 final_ack = true;
                 transmission_complete = false;      //eliminates chance for partner to desync on sending EOT
+                if(!already_sent_acks.empty())      //expect the last ACK sent to partner wasnt received
+                {
+                    ack_queue.push(already_sent_acks.back());
+                    already_sent_acks.pop_back();
+                }
                 syncComs();
                 break;
             
@@ -125,18 +132,20 @@ class Transmitter
                 break;
 
             case 2:         //RESEND lost or delayed packages State
-                std::cout << "Sending package " << pending_ack.front() << " again!" << std::endl;
+                // std::cout << "Sending package " << pending_ack.front() << " again!" << std::endl;
+                toResend = pending_ack.front();
                 pending_ack.pop();
-                sendStack(pending_ack.front());
+                pending_ack.push(toResend);
+                sendStack(toResend);
                 break;
 
             case 3:         //RESPOND only to received signal State
                 if(!transmission_complete)
                 {
-                    std::cout << "Sending EOT Signal" << std::endl;
+                    // std::cout << "Sending EOT Signal" << std::endl;
                     transmission_complete = true;
                     writeByte(0x01);
-                    for(int i = 0; i < HEADER_SIZE+BYTE_PER_PACKAGE-2; i++)
+                    for(uint32_t i = 0; i < HEADER_SIZE+BYTE_PER_PACKAGE-2; i++)
                     {
                         writeByte(0x04);        //send a stack filled with EOT to signal end of transmission
                     }
@@ -148,7 +157,7 @@ class Transmitter
                 break;
             
             default:
-                std::cout << "Transmitter ran into an unknown Problem!" << std::endl;
+                // std::cout << "Transmitter ran into an unknown Problem!" << std::endl;
                 break;
             }
 
@@ -169,8 +178,9 @@ class Transmitter
             {
                 if(partner_finished.load())
                 {
-                    std::cout << "Program ended successfully!" << std::endl;
-                    for(int i = 0; i < HEADER_SIZE+BYTE_PER_PACKAGE-2; i++)
+                    // std::cout << "Program ended successfully!" << std::endl;
+                    writeByte(0x01);
+                    for(uint32_t i = 0; i < HEADER_SIZE+BYTE_PER_PACKAGE-2; i++)
                     {
                         writeByte(0x04);        //send last stack filled with EOT to signal end of transmission
                     }
@@ -200,7 +210,7 @@ class Transmitter
     {
         if(!listening.load() && !established.load())
         {
-            std::cout << "Sending SYNC IDLE." << std::endl;
+            // std::cout << "Sending SYNC IDLE." << std::endl;
             for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC; i++)                  //sending SYNC IDLE
             {
                 writeByte(0x16);
@@ -210,7 +220,7 @@ class Transmitter
         
         else if(listening.load() && !established.load())
         {
-            std::cout << "Sending ACK." << std::endl;
+            // std::cout << "Sending ACK." << std::endl;
             for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC*3; i++)                  //sending ACK for own receiver is listening
             {
                 writeByte(0x06);
@@ -234,7 +244,22 @@ class Transmitter
         stack_package.insert(stack_package.end(), index_conversion.begin(), index_conversion.end());        //insert sequence number
 
         stack_package.push_back(0x06);                                                                  //send acknowledgment
-        std::vector<uint8_t> ack_conversion = ack_queue.empty() ? uint32ToByte(uint32_t(~0)) : uint32ToByte(ack_queue.front());
+        uint32_t toAck = ack_queue.front();
+        std::vector<uint8_t> ack_conversion = uint32ToByte(~0);
+        while(!ack_queue.empty())
+        {
+            if(std::find(already_sent_acks.begin(), already_sent_acks.end(), toAck) == already_sent_acks.end())
+            {
+                ack_conversion = uint32ToByte(toAck);
+                ack_queue.remove(toAck);
+                already_sent_acks.push_back(toAck);
+                break;
+            }
+            else
+            {
+                ack_queue.pop();
+            }
+        }
         stack_package.insert(stack_package.end(), ack_conversion.begin(), ack_conversion.end());        //insert acknowledgment number
         
         stack_package.insert(stack_package.end(), 2, 0x16);                                                 //insert a sync idle check
@@ -260,24 +285,23 @@ class Transmitter
         }
 
         stack_package.push_back(0x03);                                                                      //end on end of text
-        ack_queue.pop();
 
         for(uint8_t byte : stack_package)                                                                   //actually sending the message
         {
             writeByte(byte);
         }
 
-        std::cout << std::endl;
-        std::cout << "Package " << package_index << " was sent." << std::endl;
-        std::cout << "sequence num size " << sequence_num_queue.size() << " pending ack size " << pending_ack.size() << std::endl;
-        std::cout << "Checksum " << int(checksum) << std::endl;
+        // std::cout << std::endl;
+        // std::cout << "Package " << package_index << " was sent." << std::endl;
+        // std::cout << "sequence num content front size " << sequence_num_queue.front()<<sequence_num_queue.size() << " pending ack content front size " << pending_ack.front()<<pending_ack.size() << std::endl;
+        // std::cout << "Checksum " << int(checksum) << std::endl;
     }
 
 
 
     void writeByte(uint8_t byte)
     {
-        std::cout << "Sending " << int(byte) << std::endl;
+        // std::cout << "Sending " << int(byte) << std::endl;
 
         if (resync_count % BYTE_BETWEEN_SYNC == 0 && resync_count != 0)
         {
