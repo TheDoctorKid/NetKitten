@@ -48,7 +48,7 @@ int main(int argc, char** argv)
     else if (mode == 2) 
     {
         serial_ptr = &serial;
-        serial_ptr->open("/dev/ttyUSB1");  // Open serial port
+        serial_ptr->open("/dev/ttyUSB0");  // Open serial port
         serial_ptr->set_option(boost::asio::serial_port_base::baud_rate(9600));
         serial_ptr->set_option(boost::asio::serial_port_base::character_size(8));
         serial_ptr->set_option(boost::asio::serial_port_base::parity(boost::asio::serial_port_base::parity::none));

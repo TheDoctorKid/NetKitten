@@ -70,8 +70,7 @@ class Transmitter
     {
         if(!list_mode)
         {
-            transmission_content.assign((std::istreambuf_iterator<char>(std::cin)), {});
-            // std::cout << "Sending given Message..." << std::endl;
+            transmission_content.assign(std::istreambuf_iterator<char>(std::cin), std::istreambuf_iterator<char>());
         }
 
         else
