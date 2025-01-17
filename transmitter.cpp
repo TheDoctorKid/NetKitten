@@ -68,16 +68,11 @@ class Transmitter
 
     void beginTransmission()        //prepare by reading cin
     {
-        if(!list_mode)
+        char byte;
+        while (std::cin.get(byte)) 
         {
-            transmission_content.assign(std::istreambuf_iterator<char>(std::cin), std::istreambuf_iterator<char>());
+            transmission_content.push_back(static_cast<uint8_t>(byte));
         }
-
-        else
-        {
-            // std::cout << "Just listening..." << std::endl;
-        }
-        
         processData();
         return;
     }
@@ -86,10 +81,9 @@ class Transmitter
     
     void processData()             //pads content and generates sequence numbers
     {
-        if(transmission_content.size() % BYTE_PER_PACKAGE != 0)     //if there is something to send, save in content and pad it
-        {
-            transmission_content.insert(transmission_content.end(), BYTE_PER_PACKAGE - (transmission_content.size() % BYTE_PER_PACKAGE), 0x00);       //adds padding if needed
-        }
+        uint8_t padding = BYTE_PER_PACKAGE - (transmission_content.size() % BYTE_PER_PACKAGE);
+        transmission_content.insert(transmission_content.end(), padding, 0x00);       //adds padding if needed
+        transmission_content.back() = padding;
 
         for(uint32_t i = 0; i < transmission_content.size() / BYTE_PER_PACKAGE; i++)        //generate all the sequence numbers
         {
@@ -220,7 +214,7 @@ class Transmitter
         else if(listening.load() && !established.load())
         {
             // std::cout << "Sending ACK." << std::endl;
-            for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC*3; i++)                  //sending ACK for own receiver is listening
+            for(uint32_t i = 0; i < BYTE_BETWEEN_SYNC*1; i++)                  //sending ACK for own receiver is listening
             {
                 writeByte(0x06);
 

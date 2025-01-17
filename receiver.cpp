@@ -44,12 +44,20 @@ class Receiver
                 continue;
 
             case 2:
-                // std::cout << "Received Content: ";
-                for(uint8_t byte: transmission_content)        //output all bytes from the transmission
+                if(partner_finished.load())
                 {
-                    std::cout.write(reinterpret_cast<const char*>(&byte), 8);
+                    currentState = 3;               //go back to listening for transmission was already stored
+                    continue;
+                }
+                // std::cout << "Received Content: ";
+                transmission_content.erase(transmission_content.end() - transmission_content.back(), transmission_content.end());        //output all bytes from the transmission
+                for(uint8_t byte:transmission_content)
+                {
+                    std::cout.write(reinterpret_cast<const char*>(&byte), 1);
                 }
                 std::cout.flush();
+                // std::cout << "Partner Finished with EOT" << std::endl;
+                partner_finished.store(true);   //store that transmission was fully received
                 currentState = 3;               //go back to listening in another transmission is sent
                 continue;
 
@@ -317,8 +325,6 @@ class Receiver
         eot_reference.back() = 0x03;        //end of text
         if(read_buffer == eot_reference)        //receiver noticed other client's end of transmission
         {
-            // std::cout << "Partner Finished with EOT" << std::endl;
-            partner_finished.store(true);
             currentState = 2;               //write received message into output
             return true;
         }
